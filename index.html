@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 핸드 드로잉 - 수학 모드</title>
+    <!-- MediaPipe 라이브러리 로드 -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #1a1a1a;
+            color: white;
+            font-family: 'Pretendard', sans-serif;
+            overflow: hidden;
+        }
+        #ui-panel {
+            padding: 15px;
+            text-align: center;
+            background: rgba(255, 255, 255, 0.1);
+            width: 100%;
+            backdrop-filter: blur(10px);
+            z-index: 10;
+        }
+        .status {
+            font-size: 1.2rem;
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #00d4ff;
+        }
+        .controls {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            font-size: 0.85rem;
+            color: #eee;
+        }
+        #container {
+            position: relative;
+            width: 100vw;
+            height: calc(100vh - 80px);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        video {
+            display: none;
+        }
+        canvas {
+            position: absolute;
+            transform: scaleX(-1); /* 거울 모드 */
+            background-color: transparent;
+        }
+        #bg-canvas {
+            z-index: 1; /* 카메라 화면 */
+        }
+        #draw-canvas {
+            z-index: 2; /* 그림 레이어 */
+        }
+        .color-indicator {
+            width: 12px;
+            height: 12px;
+            display: inline-block;
+            border-radius: 50%;
+            border: 1px solid white;
+            margin-left: 5px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-panel">
+        <div class="status">모드: <span id="mode-text">카메라 준비 중...</span></div>
+        <div class="controls">
+            <span>☝ 검지: <b>그리기</b> <span id="current-color" class="color-indicator" style="background: blue;"></span></span>
+            <span>🖐 전체: <b>지우개</b></span>
+            <span>✌ 2개: <b style="color: #ff4d4d;">빨강</b></span>
+            <span>🤟 3개: <b style="color: #4dff4d;">초록</b></span>
+            <span>🖖 4개: <b style="color: #4d4dff;">파랑</b></span>
+        </div>
+    </div>
+
+    <div id="container">
+        <video id="input-video"></video>
+        <canvas id="bg-canvas"></canvas>
+        <canvas id="draw-canvas"></canvas>
+    </div>
+
+    <script>
+        const videoElement = document.getElementById('input-video');
+        const bgCanvas = document.getElementById('bg-canvas');
+        const bgCtx = bgCanvas.getContext('2d');
+        const drawCanvas = document.getElementById('draw-canvas');
+        const drawCtx = drawCanvas.getContext('2d');
+        const modeText = document.getElementById('mode-text');
+        const colorIndicator = document.getElementById('current-color');
+
+        let drawColor = '#0000FF';
+        let brushThickness = 8;
+        let eraserThickness = 60;
+        let prevX = 0, prevY = 0;
+
+        function resize() {
+            const width = window.innerWidth;
+            const height = window.innerHeight - document.getElementById('ui-panel').offsetHeight;
+            
+            // 비율 유지하며 캔버스 크기 조정
+            bgCanvas.width = drawCanvas.width = width;
+            bgCanvas.height = drawCanvas.height = height;
+        }
+
+        window.addEventListener('resize', resize);
+        resize();
+
+        function onResults(results) {
+            // 1. 카메라 화면 그리기
+            bgCtx.save();
+            bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
+            bgCtx.drawImage(results.image, 0, 0, bgCanvas.width, bgCanvas.height);
+            bgCtx.restore();
+
+            if (results.multiHandLandmarks && results.multiHandedness) {
+                for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+                    const landmarks = results.multiHandLandmarks[i];
+                    const handedness = results.multiHandedness[i].label; // 'Left' or 'Right'
+                    
+                    // 랜드마크 8번(검지 끝) 좌표
+                    const ix = landmarks[8].x * drawCanvas.width;
+                    const iy = landmarks[8].y * drawCanvas.height;
+
+                    // 손가락 상태 확인
+                    const fingers = [8, 12, 16, 20].map(id => landmarks[id].y < landmarks[id-2].y);
+                    const upCount = fingers.filter(Boolean).length;
+                    
+                    // 엄지 접힘 (거울 모드 반영)
+                    let thumbFolded = (handedness === 'Right') ? 
+                        (landmarks[4].x < landmarks[3].x) : (landmarks[4].x > landmarks[3].x);
+
+                    // --- 로직 처리 ---
+                    if (upCount === 4 && !thumbFolded) {
+                        // 지우개 (모든 손가락 펼침)
+                        modeText.innerText = "지우개";
+                        drawCtx.globalCompositeOperation = 'destination-out';
+                        drawCtx.beginPath();
+                        drawCtx.arc(ix, iy, eraserThickness/2, 0, Math.PI * 2);
+                        drawCtx.fill();
+                        prevX = 0; prevY = 0;
+                    } 
+                    else if (fingers[0] && upCount === 1 && thumbFolded) {
+                        // 그리기 (검지만 펼침)
+                        modeText.innerText = "그리는 중...";
+                        drawCtx.globalCompositeOperation = 'source-over';
+                        if (prevX !== 0 && prevY !== 0) {
+                            drawCtx.beginPath();
+                            drawCtx.strokeStyle = drawColor;
+                            drawCtx.lineWidth = brushThickness;
+                            drawCtx.lineCap = 'round';
+                            drawCtx.moveTo(prevX, prevY);
+                            drawCtx.lineTo(ix, iy);
+                            drawCtx.stroke();
+                        }
+                        prevX = ix; prevY = iy;
+                    } 
+                    else {
+                        // 대기 및 색상 변경
+                        prevX = 0; prevY = 0;
+                        if (upCount === 2) {
+                            drawColor = '#FF0000';
+                            modeText.innerText = "색상 변경: 빨강";
+                        } else if (upCount === 3) {
+                            drawColor = '#00FF00';
+                            modeText.innerText = "색상 변경: 초록";
+                        } else if (upCount === 4) {
+                            drawColor = '#0000FF';
+                            modeText.innerText = "색상 변경: 파랑";
+                        } else {
+                            modeText.innerText = "대기 중...";
+                        }
+                        colorIndicator.style.background = drawColor;
+                    }
+                }
+            } else {
+                prevX = 0; prevY = 0;
+                modeText.innerText = "손을 보여주세요";
+            }
+        }
+
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.6,
+            minTrackingConfidence: 0.6
+        });
+
+        hands.onResults(onResults);
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 1280,
+            height: 720
+        });
+        camera.start();
+    </script>
+</body>
+</html>
