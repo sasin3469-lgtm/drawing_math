@@ -3,11 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 핸드 드로잉 - 수학 모드 V2.1</title>
+    <title>AI 수학 판서 시스템 V3 (Pinch-to-Draw)</title>
     <!-- MediaPipe 라이브러리 로드 -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     
     <style>
         body {
@@ -16,31 +16,32 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            background-color: #1a1a1a;
+            background-color: #121212;
             color: white;
             font-family: 'Pretendard', sans-serif;
             overflow: hidden;
         }
         #ui-panel {
-            padding: 15px;
+            padding: 12px;
             text-align: center;
-            background: rgba(255, 255, 255, 0.1);
+            background: rgba(0, 0, 0, 0.7);
             width: 100%;
-            backdrop-filter: blur(10px);
+            backdrop-filter: blur(15px);
             z-index: 10;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
         }
         .status {
-            font-size: 1.2rem;
-            font-weight: bold;
+            font-size: 1.1rem;
+            font-weight: 600;
             margin-bottom: 5px;
-            color: #00d4ff;
+            color: #4db8ff;
         }
         .controls {
             display: flex;
             gap: 15px;
             justify-content: center;
-            font-size: 0.85rem;
-            color: #eee;
+            font-size: 0.8rem;
+            color: #aaa;
         }
         #container {
             position: relative;
@@ -56,31 +57,26 @@
         canvas {
             position: absolute;
             transform: scaleX(-1); /* 거울 모드 */
-            background-color: transparent;
         }
-        #bg-canvas {
-            z-index: 1;
-        }
-        #draw-canvas {
-            z-index: 2;
-        }
+        #bg-canvas { z-index: 1; }
+        #draw-canvas { z-index: 2; }
+        #output-canvas { z-index: 3; opacity: 0.5; pointer-events: none; }
         .color-indicator {
-            width: 12px;
-            height: 12px;
+            width: 10px;
+            height: 10px;
             display: inline-block;
             border-radius: 50%;
-            border: 1px solid white;
-            margin-left: 5px;
+            margin-left: 4px;
         }
     </style>
 </head>
 <body>
 
     <div id="ui-panel">
-        <div class="status">모드: <span id="mode-text">카메라 준비 중...</span></div>
+        <div class="status">수학 판서 모드: <span id="mode-text">연결 중...</span></div>
         <div class="controls">
-            <span>☝ 검지: <b>그리기</b> <span id="current-color" class="color-indicator" style="background: blue;"></span></span>
-            <span>🖐 5개: <b style="font-size: 1.1em; color: #ffcc00;">대형 지우개</b></span>
+            <span>🤏 엄지+검지: <b>판서</b> <span id="current-color" class="color-indicator" style="background: blue;"></span></span>
+            <span>🖐 손바닥: <b>대형 지우개</b></span>
             <span>✌ 2개: <b style="color: #ff4d4d;">빨강</b></span>
             <span>🤟 3개: <b style="color: #4dff4d;">초록</b></span>
             <span>🖖 4개: <b style="color: #4d4dff;">파랑</b></span>
@@ -91,6 +87,7 @@
         <video id="input-video"></video>
         <canvas id="bg-canvas"></canvas>
         <canvas id="draw-canvas"></canvas>
+        <canvas id="output-canvas"></canvas>
     </div>
 
     <script>
@@ -99,19 +96,25 @@
         const bgCtx = bgCanvas.getContext('2d');
         const drawCanvas = document.getElementById('draw-canvas');
         const drawCtx = drawCanvas.getContext('2d');
+        const outputCanvas = document.getElementById('output-canvas');
+        const outputCtx = outputCanvas.getContext('2d');
+        
         const modeText = document.getElementById('mode-text');
         const colorIndicator = document.getElementById('current-color');
 
         let drawColor = '#0000FF';
         let brushThickness = 6;
-        let eraserThickness = 150; // 기존 60에서 2.5배 확대
+        let eraserThickness = 120;
         let prevX = 0, prevY = 0;
+        let isDrawing = false;
 
         function resize() {
             const width = window.innerWidth;
             const height = window.innerHeight - document.getElementById('ui-panel').offsetHeight;
-            bgCanvas.width = drawCanvas.width = width;
-            bgCanvas.height = drawCanvas.height = height;
+            bgCanvas.width = drawCanvas.width = outputCanvas.width = width;
+            bgCanvas.height = drawCanvas.height = outputCanvas.height = height;
+            drawCtx.lineCap = 'round';
+            drawCtx.lineJoin = 'round';
         }
 
         window.addEventListener('resize', resize);
@@ -121,85 +124,100 @@
             bgCtx.save();
             bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
             bgCtx.drawImage(results.image, 0, 0, bgCanvas.width, bgCanvas.height);
+            
+            outputCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
 
-            if (results.multiHandLandmarks) {
-                for (let i = 0; i < results.multiHandLandmarks.length; i++) {
-                    const landmarks = results.multiHandLandmarks[i];
-                    
-                    // 검지 끝(8)과 중지 끝(12) 사이의 중앙점을 기준으로 지우개/그리기 좌표 설정
-                    const ix = landmarks[9].x * drawCanvas.width; // 손바닥 중앙 부근
-                    const iy = landmarks[9].y * drawCanvas.height;
-                    const fingerTipX = landmarks[8].x * drawCanvas.width;
-                    const fingerTipY = landmarks[8].y * drawCanvas.height;
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                for (const landmarks of results.multiHandLandmarks) {
+                    // 랜드마크 시각화
+                    drawConnectors(outputCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 1});
+                    drawLandmarks(outputCtx, landmarks, {color: '#FF0000', lineWidth: 1, radius: 2});
 
-                    // 4개 손가락 펴짐 확인 (검지, 중지, 약지, 소지)
-                    const fingers = [8, 12, 16, 20].map(id => landmarks[id].y < landmarks[id-2].y);
-                    
-                    // 엄지 펴짐 판별 (손바닥 방향 무관한 거리 기반)
                     const thumbTip = landmarks[4];
-                    const pinkyBase = landmarks[17];
-                    const thumbKnuckle = landmarks[3];
-                    const distTip = Math.hypot(thumbTip.x - pinkyBase.x, thumbTip.y - pinkyBase.y);
-                    const distKnuckle = Math.hypot(thumbKnuckle.x - pinkyBase.x, thumbKnuckle.y - pinkyBase.y);
-                    const isThumbUp = distTip > distKnuckle * 1.15; 
+                    const indexTip = landmarks[8];
+                    
+                    // 판서 좌표 (검지 끝)
+                    const x = indexTip.x * drawCanvas.width;
+                    const y = indexTip.y * drawCanvas.height;
+                    
+                    // 핀치 거리
+                    const pinchDistance = Math.hypot(thumbTip.x - indexTip.x, thumbTip.y - indexTip.y);
 
-                    const upCount = fingers.filter(Boolean).length + (isThumbUp ? 1 : 0);
+                    // 손가락 상태 확인
+                    const isFingersExtended = (tipId, mcpId) => landmarks[tipId].y < landmarks[mcpId].y;
+                    let extendedCount = 0;
+                    if (landmarks[8].y < landmarks[6].y) extendedCount++;
+                    if (landmarks[12].y < landmarks[10].y) extendedCount++;
+                    if (landmarks[16].y < landmarks[14].y) extendedCount++;
+                    if (landmarks[20].y < landmarks[18].y) extendedCount++;
 
-                    // --- 모드 로직 ---
-                    // 지우개 인식 조건 완화: 4개 또는 5개 손가락이 펴지면 지우개
-                    if (upCount >= 4 && fingers[1] && fingers[2]) {
-                        modeText.innerText = "대형 지우개 작동 중";
+                    // 1. 지우개 모드: 손바닥을 펴고 핀치가 아닐 때
+                    if (extendedCount >= 3 && pinchDistance > 0.1) {
+                        modeText.innerText = "지우개 모드";
                         drawCtx.globalCompositeOperation = 'destination-out';
                         drawCtx.beginPath();
-                        drawCtx.arc(ix, iy, eraserThickness/2, 0, Math.PI * 2);
+                        drawCtx.arc(x, y, eraserThickness/2, 0, Math.PI * 2);
                         drawCtx.fill();
                         
                         // 지우개 가이드 표시
-                        bgCtx.beginPath();
-                        bgCtx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
-                        bgCtx.lineWidth = 3;
-                        bgCtx.setLineDash([10, 5]);
-                        bgCtx.arc(ix, iy, eraserThickness/2, 0, Math.PI * 2);
-                        bgCtx.stroke();
-                        bgCtx.setLineDash([]);
+                        outputCtx.beginPath();
+                        outputCtx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+                        outputCtx.lineWidth = 2;
+                        outputCtx.arc(x, y, eraserThickness/2, 0, Math.PI * 2);
+                        outputCtx.stroke();
                         
+                        isDrawing = false;
                         prevX = 0; prevY = 0;
                     } 
-                    else if (upCount === 1 && fingers[0]) {
-                        // 그리기 (검지만 펴짐)
-                        modeText.innerText = "그리는 중...";
+                    // 2. 판서 모드: 핀치(검지+엄지)
+                    else if (pinchDistance < 0.06) {
+                        modeText.innerText = "판서 중...";
                         drawCtx.globalCompositeOperation = 'source-over';
+                        
+                        if (!isDrawing) {
+                            isDrawing = true;
+                            prevX = x; prevY = y;
+                        }
+
                         if (prevX !== 0 && prevY !== 0) {
                             drawCtx.beginPath();
                             drawCtx.strokeStyle = drawColor;
                             drawCtx.lineWidth = brushThickness;
-                            drawCtx.lineCap = 'round';
                             drawCtx.moveTo(prevX, prevY);
-                            drawCtx.lineTo(fingerTipX, fingerTipY);
+                            drawCtx.lineTo(x, y);
                             drawCtx.stroke();
                         }
-                        prevX = fingerTipX; prevY = fingerTipY;
+                        prevX = x; prevY = y;
                     } 
                     else {
-                        prevX = 0; prevY = 0;
-                        if (upCount === 2 && fingers[0] && fingers[1]) {
-                            drawColor = '#FF0000';
+                        isDrawing = false;
+                        // 3. 색상 변경 (펜을 뗀 상태에서 손가락 개수)
+                        if (extendedCount === 2) {
+                            drawColor = '#FF4444';
                             modeText.innerText = "색상: 빨강";
-                        } else if (upCount === 3 && fingers[0] && fingers[1] && fingers[2]) {
-                            drawColor = '#00FF00';
+                        } else if (extendedCount === 3) {
+                            drawColor = '#44FF44';
                             modeText.innerText = "색상: 초록";
-                        } else if (upCount === 4) {
-                            drawColor = '#0000FF';
+                        } else if (extendedCount === 4) {
+                            drawColor = '#4444FF';
                             modeText.innerText = "색상: 파랑";
                         } else {
-                            modeText.innerText = "대기 중...";
+                            modeText.innerText = "대기 중 (핀치하여 쓰기)";
                         }
                         colorIndicator.style.background = drawColor;
+                        prevX = 0; prevY = 0;
+                        
+                        // 펜 위치 가이드
+                        outputCtx.beginPath();
+                        outputCtx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+                        outputCtx.arc(x, y, 10, 0, Math.PI * 2);
+                        outputCtx.stroke();
                     }
                 }
             } else {
+                modeText.innerText = "손을 찾고 있습니다...";
+                isDrawing = false;
                 prevX = 0; prevY = 0;
-                modeText.innerText = "손을 찾고 있습니다";
             }
             bgCtx.restore();
         }
@@ -211,8 +229,8 @@
         hands.setOptions({
             maxNumHands: 1,
             modelComplexity: 1,
-            minDetectionConfidence: 0.5,
-            minTrackingConfidence: 0.5
+            minDetectionConfidence: 0.7,
+            minTrackingConfidence: 0.7
         });
 
         hands.onResults(onResults);
