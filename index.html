@@ -197,35 +197,27 @@
         resize();
 
         // --- 네트워크 로직 ---
-        function initPeer() {
-            // 이전 연결이 있다면 정리
-            if (peer) {
-                peer.destroy();
-            }
+        let heartbeatInterval;
 
-            // Cloudflare(HTTPS) 환경에 최적화된 설정
-            peer = new Peer({
-                host: '0.peerjs.com', // 공용 서버 명시
-                port: 443,
-                path: '/',
-                secure: true, // HTTPS 환경 필수
+        function initPeer() {
+            if (peer) peer.destroy();
+            if (heartbeatInterval) clearInterval(heartbeatInterval);
+
+            // 가장 안정적인 기본 클라우드 서버 설정
+            peer = new Peer(undefined, {
                 debug: 1,
+                secure: true,
                 config: {
                     'iceServers': [
                         { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun2.l.google.com:19302' },
-                        { urls: 'stun:stun3.l.google.com:19302' },
-                        { urls: 'stun:stun4.l.google.com:19302' },
-                        { urls: 'stun:stun.nextcloud.com:443' }
-                    ],
-                    'sdpSemantics': 'unified-plan'
+                        { urls: 'stun:stun1.l.google.com:19302' }
+                    ]
                 }
             });
 
             peer.on('open', (id) => {
-                console.log('My Peer ID:', id);
-                connStatus.innerText = isHost ? "🟢 방장 (ID 공유 중)" : "🟢 온라인 (연결 가능)";
+                console.log('연결 성공! ID:', id);
+                connStatus.innerText = isHost ? "🟢 방장 (ID 공유 중)" : "🟢 온라인";
                 
                 if (isHost) {
                     roomIdDisplay.style.display = 'inline';
@@ -233,10 +225,12 @@
                     btnHost.style.display = 'none';
                     joinArea.style.display = 'none';
                 }
+
+                // 연결 유지를 위한 하트비트 시작 (15초마다)
+                startHeartbeat();
             });
 
             peer.on('connection', (conn) => {
-                console.log('Incoming connection from:', conn.peer);
                 handleConnection(conn);
             });
 
@@ -246,23 +240,22 @@
             });
 
             peer.on('error', (err) => {
-                console.error('PeerJS Error Details:', err);
-                let msg = '연결 오류: ';
-                if (err.type === 'peer-unavailable') msg += '방 ID를 찾을 수 없습니다.';
-                else if (err.type === 'unavailable-id') msg += 'ID를 사용할 수 없습니다.';
-                else if (err.type === 'network') {
-                    msg += '네트워크 불안정 (잠시 후 다시 시도)';
-                    // 네트워크 에러 시 3초 후 재시도 버튼 활성화
-                    setTimeout(() => {
-                        connStatus.innerText = "🔴 재시도 권장";
-                    }, 3000);
+                console.error('PeerJS 에러:', err.type);
+                if (err.type === 'network') {
+                    connStatus.innerText = "🔴 네트워크 불안정 (새로고침 권장)";
+                } else {
+                    connStatus.innerText = "🔴 오류: " + err.type;
                 }
-                else msg += err.type;
-                
-                console.warn(msg);
-                // 자동 알럿은 너무 시끄러울 수 있으므로 상태창에만 표시
-                connStatus.innerText = "🔴 " + msg;
             });
+        }
+
+        function startHeartbeat() {
+            heartbeatInterval = setInterval(() => {
+                if (peer && !peer.destroyed && peer.open) {
+                    peer.socket.send({ type: 'HEARTBEAT' });
+                    console.log('Heartbeat sent');
+                }
+            }, 15000);
         }
 
         function handleConnection(conn) {
