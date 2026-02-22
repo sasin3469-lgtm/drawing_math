@@ -138,10 +138,15 @@
                     const middleTip = landmarks[12];
                     const ringTip = landmarks[16];
                     const pinkyTip = landmarks[20];
+                    const palmCenter = landmarks[9]; // 손바닥 중앙 부근 (중지 마디)
                     
                     // 판서 좌표 (검지 끝)
                     const x = indexTip.x * drawCanvas.width;
                     const y = indexTip.y * drawCanvas.height;
+
+                    // 지우개 좌표 (손바닥 중앙)
+                    const palmX = palmCenter.x * drawCanvas.width;
+                    const palmY = palmCenter.y * drawCanvas.height;
                     
                     // 핀치 거리 (엄지와 검지 사이) - 안정성을 위해 0.05로 상향
                     const pinchDistance = Math.hypot(thumbTip.x - indexTip.x, thumbTip.y - indexTip.y);
@@ -184,18 +189,18 @@
                         }
                         prevX = x; prevY = y;
                     } 
-                    // 2. 지우개 모드: 손가락 4개 + 엄지까지 다 펴졌을 때
+                    // 2. 지우개 모드: 손가락 4개 + 엄지까지 다 펴졌을 때 (손바닥 중앙에서 지우기)
                     else if (extendedCount >= 4 && !isThumbFolded) {
                         modeText.innerText = "지우개 모드";
                         drawCtx.globalCompositeOperation = 'destination-out';
                         drawCtx.beginPath();
-                        drawCtx.arc(x, y, eraserThickness/2, 0, Math.PI * 2);
+                        drawCtx.arc(palmX, palmY, eraserThickness/2, 0, Math.PI * 2);
                         drawCtx.fill();
                         
                         outputCtx.beginPath();
                         outputCtx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
                         outputCtx.lineWidth = 2;
-                        outputCtx.arc(x, y, eraserThickness/2, 0, Math.PI * 2);
+                        outputCtx.arc(palmX, palmY, eraserThickness/2, 0, Math.PI * 2);
                         outputCtx.stroke();
                         
                         isDrawing = false;
