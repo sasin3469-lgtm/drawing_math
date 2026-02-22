@@ -3,11 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 수학 판서 시스템 V3 (Pinch-to-Draw)</title>
+    <title>AI 수학 판서 시스템 V3 (Multiplayer)</title>
     <!-- MediaPipe 라이브러리 로드 -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <!-- PeerJS (멀티플레이용) -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     
     <style>
         body {
@@ -29,11 +31,22 @@
             backdrop-filter: blur(15px);
             z-index: 10;
             border-bottom: 1px solid rgba(255,255,255,0.1);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+        .status-row {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 20px;
+            width: 100%;
+            position: relative;
         }
         .status {
             font-size: 1.1rem;
             font-weight: 600;
-            margin-bottom: 5px;
             color: #4db8ff;
         }
         .controls {
@@ -43,10 +56,47 @@
             font-size: 0.8rem;
             color: #aaa;
         }
+        /* 멀티플레이 UI */
+        #network-panel {
+            font-size: 0.9rem;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .btn {
+            background: #333;
+            border: 1px solid #555;
+            color: white;
+            padding: 5px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .btn:hover { background: #555; }
+        .btn-primary { background: #0066cc; border-color: #0055aa; }
+        .btn-primary:hover { background: #0077dd; }
+        #room-id-display {
+            font-family: monospace;
+            background: #222;
+            padding: 3px 8px;
+            border-radius: 4px;
+            border: 1px solid #444;
+            user-select: all;
+            display: none;
+        }
+        #join-input {
+            background: #222;
+            border: 1px solid #444;
+            color: white;
+            padding: 5px;
+            border-radius: 5px;
+            width: 100px;
+        }
+
         #container {
             position: relative;
             width: 100vw;
-            height: calc(100vh - 80px);
+            height: calc(100vh - 120px); /* UI 패널 높이 고려 */
             display: flex;
             justify-content: center;
             align-items: center;
@@ -73,13 +123,26 @@
 <body>
 
     <div id="ui-panel">
-        <div class="status">수학 판서 모드: <span id="mode-text">연결 중...</span></div>
+        <div class="status-row">
+            <div id="network-panel">
+                <span id="connection-status">🔴 오프라인</span>
+                <button id="btn-host" class="btn btn-primary">방 만들기</button>
+                <div id="join-area" style="display:flex; gap:5px;">
+                    <input type="text" id="join-input" placeholder="방 ID 입력">
+                    <button id="btn-join" class="btn">참여</button>
+                </div>
+                <span id="room-id-display"></span>
+            </div>
+        </div>
+        
+        <div class="status-row">
+            <div class="status">모드: <span id="mode-text">카메라 연결 중...</span></div>
+        </div>
+
         <div class="controls">
-            <span>🤏 엄지+검지: <b>판서</b> <span id="current-color" class="color-indicator" style="background: blue;"></span></span>
-            <span>🖐 손바닥: <b>대형 지우개</b></span>
-            <span>✌ 2개: <b style="color: #ff4d4d;">빨강</b></span>
-            <span>🤟 3개: <b style="color: #4dff4d;">초록</b></span>
-            <span>🖖 4개: <b style="color: #4d4dff;">파랑</b></span>
+            <span>🤏 핀치: <b>판서</b> <span id="current-color" class="color-indicator" style="background: blue;"></span></span>
+            <span>🖐 손바닥: <b>지우개</b></span>
+            <span>✌ 빨 🤟 초 🖖 파</span>
         </div>
     </div>
 
@@ -102,6 +165,20 @@
         const modeText = document.getElementById('mode-text');
         const colorIndicator = document.getElementById('current-color');
 
+        // --- 멀티플레이 변수 ---
+        let peer = null;
+        let connections = []; // 연결된 친구들
+        let isHost = false;
+        const myId = Math.random().toString(36).substr(2, 6).toUpperCase(); // 내 임시 ID
+
+        // UI 요소
+        const btnHost = document.getElementById('btn-host');
+        const btnJoin = document.getElementById('btn-join');
+        const joinInput = document.getElementById('join-input');
+        const roomIdDisplay = document.getElementById('room-id-display');
+        const joinArea = document.getElementById('join-area');
+        const connStatus = document.getElementById('connection-status');
+
         let drawColor = '#0000FF';
         let brushThickness = 6;
         let eraserThickness = 120;
@@ -120,6 +197,117 @@
         window.addEventListener('resize', resize);
         resize();
 
+        // --- 네트워크 로직 ---
+        function initPeer(id = null) {
+            peer = new Peer(id, { debug: 1 });
+
+            peer.on('open', (id) => {
+                console.log('My ID:', id);
+                if (isHost) {
+                    roomIdDisplay.style.display = 'inline';
+                    roomIdDisplay.innerText = `방 ID: ${id}`;
+                    connStatus.innerText = `🟢 방장 (ID 공유)`;
+                    btnHost.style.display = 'none';
+                    joinArea.style.display = 'none';
+                }
+            });
+
+            peer.on('connection', (conn) => {
+                handleConnection(conn);
+            });
+
+            peer.on('error', (err) => {
+                console.error(err);
+                alert('연결 오류: ' + err.type);
+            });
+        }
+
+        function handleConnection(conn) {
+            connections.push(conn);
+            updateStatus();
+
+            conn.on('data', (data) => {
+                // 데이터 받으면 그리기
+                drawRemote(data);
+                
+                // 방장이라면 다른 친구들에게도 전달 (브로드캐스트)
+                if (isHost) {
+                    connections.forEach(c => {
+                        if (c.peer !== conn.peer) { // 보낸 사람 제외
+                            c.send(data);
+                        }
+                    });
+                }
+            });
+
+            conn.on('close', () => {
+                connections = connections.filter(c => c !== conn);
+                updateStatus();
+            });
+        }
+
+        function updateStatus() {
+            connStatus.innerText = `🟢 접속자: ${connections.length + 1}/4`;
+        }
+
+        function broadcastData(data) {
+            connections.forEach(conn => conn.send(data));
+        }
+
+        // 상대방 그림 그리기
+        function drawRemote(data) {
+            const { type, x1, y1, x2, y2, color, width, eraser } = data;
+            
+            // 상대 좌표(0~1)를 절대 좌표(px)로 변환
+            const w = drawCanvas.width;
+            const h = drawCanvas.height;
+            const ax1 = x1 * w;
+            const ay1 = y1 * h;
+            const ax2 = x2 * w;
+            const ay2 = y2 * h;
+
+            if (type === 'line') {
+                if (eraser) {
+                    drawCtx.globalCompositeOperation = 'destination-out';
+                    drawCtx.beginPath();
+                    drawCtx.arc(ax2, ay2, width/2, 0, Math.PI * 2);
+                    drawCtx.fill();
+                } else {
+                    drawCtx.globalCompositeOperation = 'source-over';
+                    drawCtx.beginPath();
+                    drawCtx.strokeStyle = color;
+                    drawCtx.lineWidth = width;
+                    drawCtx.moveTo(ax1, ay1);
+                    drawCtx.lineTo(ax2, ay2);
+                    drawCtx.stroke();
+                }
+            }
+        }
+
+        // 버튼 이벤트
+        btnHost.onclick = () => {
+            isHost = true;
+            initPeer(myId); // 랜덤 ID로 방 생성
+        };
+
+        btnJoin.onclick = () => {
+            const hostId = joinInput.value.trim().toUpperCase();
+            if (!hostId) return alert('방 ID를 입력하세요');
+            
+            isHost = false;
+            initPeer(); // 내 ID는 자동 생성
+            
+            // 호스트에게 연결 시도
+            const conn = peer.connect(hostId);
+            conn.on('open', () => {
+                connStatus.innerText = "🟢 연결됨!";
+                handleConnection(conn);
+                btnHost.style.display = 'none';
+                joinArea.style.display = 'none';
+            });
+        };
+
+
         function onResults(results) {
             bgCtx.save();
             bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
@@ -129,37 +317,27 @@
 
             if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
                 for (const landmarks of results.multiHandLandmarks) {
-                    // 랜드마크 시각화
                     drawConnectors(outputCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 1});
                     drawLandmarks(outputCtx, landmarks, {color: '#FF0000', lineWidth: 1, radius: 2});
 
                     const thumbTip = landmarks[4];
                     const indexTip = landmarks[8];
-                    const middleTip = landmarks[12];
-                    const ringTip = landmarks[16];
-                    const pinkyTip = landmarks[20];
-                    const palmCenter = landmarks[9]; // 손바닥 중앙 부근 (중지 마디)
+                    const palmCenter = landmarks[9]; 
                     
-                    // 판서 좌표 (검지 끝)
                     const x = indexTip.x * drawCanvas.width;
                     const y = indexTip.y * drawCanvas.height;
-
-                    // 지우개 좌표 (손바닥 중앙)
                     const palmX = palmCenter.x * drawCanvas.width;
                     const palmY = palmCenter.y * drawCanvas.height;
                     
-                    // 핀치 거리 (엄지와 검지 사이) - 안정성을 위해 0.05로 상향
                     const pinchDistance = Math.hypot(thumbTip.x - indexTip.x, thumbTip.y - indexTip.y);
 
-                    // 손가락 펴짐 확인 (끝마디가 중간마디보다 위에 있는지)
                     const isIndexUp = landmarks[8].y < landmarks[6].y;
                     const isMiddleUp = landmarks[12].y < landmarks[10].y;
                     const isRingUp = landmarks[16].y < landmarks[14].y;
                     const isPinkyUp = landmarks[20].y < landmarks[18].y;
                     
-                    // 엄지 접힘/펴짐 확인 (사용자 제안: 엄지 끝 4번과 검지 마디 5번 사이의 거리)
                     const thumbToIndexBaseDist = Math.hypot(thumbTip.x - landmarks[5].x, thumbTip.y - landmarks[5].y);
-                    const isThumbFolded = thumbToIndexBaseDist < 0.1; // 엄지가 검지 쪽으로 붙어있으면 true
+                    const isThumbFolded = thumbToIndexBaseDist < 0.1; 
 
                     let extendedCount = 0;
                     if (isIndexUp) extendedCount++;
@@ -167,9 +345,7 @@
                     if (isRingUp) extendedCount++;
                     if (isPinkyUp) extendedCount++;
 
-                    // --- 로직 우선순위 재정의 ---
-                    
-                    // 1. 판서 모드 (최우선): 엄지와 검지가 닿았을 때
+                    // 1. 판서 모드
                     if (pinchDistance < 0.05) {
                         modeText.innerText = "판서 중...";
                         drawCtx.globalCompositeOperation = 'source-over';
@@ -180,16 +356,32 @@
                         }
 
                         if (prevX !== 0 && prevY !== 0) {
+                            // 로컬 그리기
                             drawCtx.beginPath();
                             drawCtx.strokeStyle = drawColor;
                             drawCtx.lineWidth = brushThickness;
                             drawCtx.moveTo(prevX, prevY);
                             drawCtx.lineTo(x, y);
                             drawCtx.stroke();
+
+                            // 데이터 전송 (상대 좌표로 변환)
+                            if (connections.length > 0) {
+                                const data = {
+                                    type: 'line',
+                                    x1: prevX / drawCanvas.width,
+                                    y1: prevY / drawCanvas.height,
+                                    x2: x / drawCanvas.width,
+                                    y2: y / drawCanvas.height,
+                                    color: drawColor,
+                                    width: brushThickness,
+                                    eraser: false
+                                };
+                                broadcastData(data);
+                            }
                         }
                         prevX = x; prevY = y;
                     } 
-                    // 2. 지우개 모드: 손가락 4개 + 엄지까지 다 펴졌을 때 (손바닥 중앙에서 지우기)
+                    // 2. 지우개 모드
                     else if (extendedCount >= 4 && !isThumbFolded) {
                         modeText.innerText = "지우개 모드";
                         drawCtx.globalCompositeOperation = 'destination-out';
@@ -202,11 +394,26 @@
                         outputCtx.lineWidth = 2;
                         outputCtx.arc(palmX, palmY, eraserThickness/2, 0, Math.PI * 2);
                         outputCtx.stroke();
+
+                        // 지우개 데이터 전송 (원으로 지우는 대신 큰 점으로 처리 or 그냥 좌표 전송)
+                        // 여기선 펜처럼 연속 전송하되 eraser 플래그 사용
+                        if (connections.length > 0) {
+                             const data = {
+                                type: 'line', // 원으로 처리하면 좋지만, line 로직 재사용
+                                x1: palmX / drawCanvas.width,
+                                y1: palmY / drawCanvas.height,
+                                x2: palmX / drawCanvas.width, // 점 찍기
+                                y2: palmY / drawCanvas.height,
+                                color: 'black',
+                                width: eraserThickness,
+                                eraser: true
+                            };
+                            broadcastData(data);
+                        }
                         
                         isDrawing = false;
                         prevX = 0; prevY = 0;
                     }
-                    // 3. 대기 및 색상 변경 모드
                     else {
                         isDrawing = false;
                         prevX = 0; prevY = 0;
@@ -218,7 +425,6 @@
                             drawColor = '#44FF44';
                             modeText.innerText = "색상: 초록";
                         } else if (extendedCount === 4 && isThumbFolded) {
-                            // 엄지를 검지 마디 쪽에 붙이고 손가락 4개를 펴면 파랑
                             drawColor = '#4444FF';
                             modeText.innerText = "색상: 파랑";
                         } else {
@@ -226,7 +432,6 @@
                         }
                         colorIndicator.style.background = drawColor;
                         
-                        // 펜 위치 가이드
                         outputCtx.beginPath();
                         outputCtx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
                         outputCtx.arc(x, y, 10, 0, Math.PI * 2);
