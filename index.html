@@ -169,7 +169,6 @@
         let peer = null;
         let connections = []; // 연결된 친구들
         let isHost = false;
-        const myId = Math.random().toString(36).substr(2, 6).toUpperCase(); // 내 임시 ID
 
         // UI 요소
         const btnHost = document.getElementById('btn-host');
@@ -198,42 +197,74 @@
         resize();
 
         // --- 네트워크 로직 ---
-        function initPeer(id = null) {
-            peer = new Peer(id, { debug: 1 });
+        function initPeer() {
+            // ID를 직접 지정하지 않고 서버가 생성하게 함 (중복 오류 방지)
+            peer = new Peer(null, {
+                debug: 2,
+                config: {
+                    'iceServers': [
+                        { url: 'stun:stun.l.google.com:19302' },
+                        { url: 'stun:stun1.l.google.com:19302' }
+                    ]
+                }
+            });
 
             peer.on('open', (id) => {
-                console.log('My ID:', id);
+                console.log('My Peer ID:', id);
+                connStatus.innerText = isHost ? "🟢 방장 (ID 공유 대기)" : "🟢 온라인";
+                
                 if (isHost) {
                     roomIdDisplay.style.display = 'inline';
                     roomIdDisplay.innerText = `방 ID: ${id}`;
-                    connStatus.innerText = `🟢 방장 (ID 공유)`;
                     btnHost.style.display = 'none';
                     joinArea.style.display = 'none';
                 }
             });
 
             peer.on('connection', (conn) => {
+                console.log('Incoming connection from:', conn.peer);
                 handleConnection(conn);
             });
 
             peer.on('error', (err) => {
-                console.error(err);
-                alert('연결 오류: ' + err.type);
+                console.error('PeerJS Error:', err.type, err);
+                let msg = '연결 오류: ';
+                if (err.type === 'peer-unavailable') msg += '방 ID를 찾을 수 없습니다.';
+                else if (err.type === 'unavailable-id') msg += 'ID를 사용할 수 없습니다. 다시 시도하세요.';
+                else if (err.type === 'network') msg += '네트워크가 불안정합니다.';
+                else msg += err.type;
+                
+                alert(msg);
+                connStatus.innerText = "🔴 오류 발생";
             });
         }
 
         function handleConnection(conn) {
+            // 이미 4명이면 거절 (방장 포함 4명 = 연결 3개)
+            if (connections.length >= 3) {
+                conn.on('open', () => {
+                    conn.send({ type: 'error', message: '방이 가득 찼습니다 (최대 4명)' });
+                    setTimeout(() => conn.close(), 500);
+                });
+                return;
+            }
+
             connections.push(conn);
             updateStatus();
 
             conn.on('data', (data) => {
+                if (data.type === 'error') {
+                    alert(data.message);
+                    return;
+                }
+                
                 // 데이터 받으면 그리기
                 drawRemote(data);
                 
                 // 방장이라면 다른 친구들에게도 전달 (브로드캐스트)
                 if (isHost) {
                     connections.forEach(c => {
-                        if (c.peer !== conn.peer) { // 보낸 사람 제외
+                        if (c.peer !== conn.peer) {
                             c.send(data);
                         }
                     });
@@ -241,6 +272,7 @@
             });
 
             conn.on('close', () => {
+                console.log('Connection closed:', conn.peer);
                 connections = connections.filter(c => c !== conn);
                 updateStatus();
             });
@@ -251,7 +283,9 @@
         }
 
         function broadcastData(data) {
-            connections.forEach(conn => conn.send(data));
+            connections.forEach(conn => {
+                if (conn.open) conn.send(data);
+            });
         }
 
         // 상대방 그림 그리기
@@ -287,23 +321,26 @@
         // 버튼 이벤트
         btnHost.onclick = () => {
             isHost = true;
-            initPeer(myId); // 랜덤 ID로 방 생성
+            connStatus.innerText = "🟡 서버 연결 중...";
+            initPeer(); 
         };
 
         btnJoin.onclick = () => {
-            const hostId = joinInput.value.trim().toUpperCase();
+            const hostId = joinInput.value.trim();
             if (!hostId) return alert('방 ID를 입력하세요');
             
             isHost = false;
-            initPeer(); // 내 ID는 자동 생성
+            connStatus.innerText = "🟡 서버 연결 중...";
+            initPeer(); 
             
-            // 호스트에게 연결 시도
-            const conn = peer.connect(hostId);
-            conn.on('open', () => {
-                connStatus.innerText = "🟢 연결됨!";
-                handleConnection(conn);
-                btnHost.style.display = 'none';
-                joinArea.style.display = 'none';
+            peer.on('open', () => {
+                const conn = peer.connect(hostId);
+                conn.on('open', () => {
+                    connStatus.innerText = "🟢 연결됨!";
+                    handleConnection(conn);
+                    btnHost.style.display = 'none';
+                    joinArea.style.display = 'none';
+                });
             });
         };
 
