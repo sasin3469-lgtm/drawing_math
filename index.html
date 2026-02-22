@@ -143,7 +143,7 @@
                     const x = indexTip.x * drawCanvas.width;
                     const y = indexTip.y * drawCanvas.height;
                     
-                    // 핀치 거리 (엄지와 검지 사이) - 더 민감하게 (0.03)
+                    // 핀치 거리 (엄지와 검지 사이) - 안정성을 위해 0.05로 상향
                     const pinchDistance = Math.hypot(thumbTip.x - indexTip.x, thumbTip.y - indexTip.y);
 
                     // 손가락 펴짐 확인 (끝마디가 중간마디보다 위에 있는지)
@@ -152,9 +152,9 @@
                     const isRingUp = landmarks[16].y < landmarks[14].y;
                     const isPinkyUp = landmarks[20].y < landmarks[18].y;
                     
-                    // 엄지 펴짐 확인 (검지 마디와의 거리로 판별)
-                    const thumbDistance = Math.hypot(thumbTip.x - landmarks[2].x, thumbTip.y - landmarks[2].y);
-                    const isThumbUp = thumbDistance > 0.1; 
+                    // 엄지 접힘/펴짐 확인 (사용자 제안: 엄지 끝 4번과 검지 마디 5번 사이의 거리)
+                    const thumbToIndexBaseDist = Math.hypot(thumbTip.x - landmarks[5].x, thumbTip.y - landmarks[5].y);
+                    const isThumbFolded = thumbToIndexBaseDist < 0.1; // 엄지가 검지 쪽으로 붙어있으면 true
 
                     let extendedCount = 0;
                     if (isIndexUp) extendedCount++;
@@ -164,8 +164,8 @@
 
                     // --- 로직 우선순위 재정의 ---
                     
-                    // 1. 판서 모드 (최우선): 아주 가깝게 붙었을 때만
-                    if (pinchDistance < 0.03) {
+                    // 1. 판서 모드 (최우선): 엄지와 검지가 닿았을 때
+                    if (pinchDistance < 0.05) {
                         modeText.innerText = "판서 중...";
                         drawCtx.globalCompositeOperation = 'source-over';
                         
@@ -185,7 +185,7 @@
                         prevX = x; prevY = y;
                     } 
                     // 2. 지우개 모드: 손가락 4개 + 엄지까지 다 펴졌을 때
-                    else if (extendedCount >= 4 && isThumbUp) {
+                    else if (extendedCount >= 4 && !isThumbFolded) {
                         modeText.innerText = "지우개 모드";
                         drawCtx.globalCompositeOperation = 'destination-out';
                         drawCtx.beginPath();
@@ -212,7 +212,8 @@
                         } else if (extendedCount === 3 && isIndexUp && isMiddleUp && isRingUp) {
                             drawColor = '#44FF44';
                             modeText.innerText = "색상: 초록";
-                        } else if (extendedCount === 4 && !isThumbUp) {
+                        } else if (extendedCount === 4 && isThumbFolded) {
+                            // 엄지를 검지 마디 쪽에 붙이고 손가락 4개를 펴면 파랑
                             drawColor = '#4444FF';
                             modeText.innerText = "색상: 파랑";
                         } else {
