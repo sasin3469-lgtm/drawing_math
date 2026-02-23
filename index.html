@@ -69,15 +69,16 @@
 
         <div class="color-box">
             <span>색상:</span>
-            <div class="color-btn active" style="background:#00d4ff;" onclick="changeColor('#00d4ff', 0)"></div>
-            <div class="color-btn" style="background:#ff4444;" onclick="changeColor('#ff4444', 1)"></div>
-            <div class="color-btn" style="background:#00ff88;" onclick="changeColor('#00ff88', 2)"></div>
+            <div class="color-btn active" style="background:#F5D061;" onclick="changeColor('#F5D061', 0)"></div>
+            <div class="color-btn" style="background:#00d4ff;" onclick="changeColor('#00d4ff', 1)"></div>
+            <div class="color-btn" style="background:#ff4444;" onclick="changeColor('#ff4444', 2)"></div>
+            <div class="color-btn" style="background:#00ff88;" onclick="changeColor('#00ff88', 3)"></div>
         </div>
 
         <div class="guide">
             ✏️ <b>그리기:</b> <kbd>Shift</kbd> + 손 움직이기<br>
             ✋ <b>지우개:</b> 손가락 3개 이상 펴기<br>
-            🎨 <b>색상변경:</b> 숫자키 <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd><br>
+            🎨 <b>색상변경:</b> 숫자키 <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd><br>
             🧹 <b>전체삭제:</b> <kbd>Space</kbd>
         </div>
     </div>
@@ -113,8 +114,8 @@
         const peers = {};
 
         // 색상 관리
-        let currentColor = "#00d4ff";
-        const colors = ["#00d4ff", "#ff4444", "#00ff88"];
+        let currentColor = "#F5D061";
+        const colors = ["#F5D061", "#00d4ff", "#ff4444", "#00ff88"];
         function changeColor(color, index) {
             currentColor = color;
             document.querySelectorAll('.color-btn').forEach((btn, i) => {
@@ -201,9 +202,26 @@
         // --- 그리기 및 스켈레톤 시각화 ---
         function drawLine(ctx, from, to, color, size, isEraser) {
             ctx.globalCompositeOperation = isEraser ? 'destination-out' : 'source-over';
-            ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = isEraser ? 60 : size;
-            ctx.lineCap = "round"; ctx.lineJoin = "round";
-            ctx.moveTo(from.x, from.y); ctx.lineTo(to.x, to.y); ctx.stroke();
+            
+            // 빛나는 효과(Glow) 설정
+            if (!isEraser) {
+                ctx.shadowBlur = 15; // 빛이 퍼지는 정도
+                ctx.shadowColor = color; // 빛의 색상 (선 색상과 동일하게)
+            } else {
+                ctx.shadowBlur = 0;
+            }
+
+            ctx.beginPath(); 
+            ctx.strokeStyle = color; 
+            ctx.lineWidth = isEraser ? 60 : size;
+            ctx.lineCap = "round"; 
+            ctx.lineJoin = "round";
+            ctx.moveTo(from.x, from.y); 
+            ctx.lineTo(to.x, to.y); 
+            ctx.stroke();
+            
+            // 다음 그리기를 위해 효과 초기화
+            ctx.shadowBlur = 0;
             ctx.globalCompositeOperation = 'source-over';
         }
 
@@ -237,6 +255,8 @@
         }
 
         let lastPos = null;
+        let smoothPos = null; // 부드러운 이동을 위한 변수
+        const smoothingFactor = 0.5; // 0~1 사이, 낮을수록 더 부드럽지만 반응은 약간 느려짐
         let isShiftPressed = false;
         
         const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
@@ -246,7 +266,18 @@
             if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
                 const landmarks = results.multiHandLandmarks[0];
                 const indexTip = landmarks[8];
-                const currentPos = { x: indexTip.x * drawCanvas.width, y: indexTip.y * drawCanvas.height };
+                const rawPos = { x: indexTip.x * drawCanvas.width, y: indexTip.y * drawCanvas.height };
+                
+                // 좌표 평활화 (Smoothing): 떨림 방지
+                if (!smoothPos) {
+                    smoothPos = rawPos;
+                } else {
+                    smoothPos = {
+                        x: smoothPos.x * smoothingFactor + rawPos.x * (1 - smoothingFactor),
+                        y: smoothPos.y * smoothingFactor + rawPos.y * (1 - smoothingFactor)
+                    };
+                }
+                const currentPos = smoothPos;
                 
                 const fingersUp = [8, 12, 16, 20].filter(i => landmarks[i].y < landmarks[i-2].y).length;
                 const isEraser = fingersUp >= 3;
@@ -266,6 +297,7 @@
             } else {
                 sctx.clearRect(0, 0, skeletonCanvas.width, skeletonCanvas.height);
                 lastPos = null;
+                smoothPos = null; // 손을 놓으면 평활화 초기화
             }
         });
 
@@ -281,6 +313,7 @@
             if (e.key === '1') changeColor(colors[0], 0);
             if (e.key === '2') changeColor(colors[1], 1);
             if (e.key === '3') changeColor(colors[2], 2);
+            if (e.key === '4') changeColor(colors[3], 3);
         };
         window.onkeyup = e => { if (e.key === 'Shift') isShiftPressed = false; };
     </script>
