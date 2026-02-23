@@ -3,64 +3,93 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Smart Canvas Pro+ (Firebase Cloud)</title>
+    <title>AI 화상 공유 칠판 (Face + Draw)</title>
     <!-- Firebase SDK -->
     <script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-database-compat.js"></script>
     <!-- MediaPipe SDK -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <!-- PeerJS (WebRTC 영상 통화용) -->
+    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+    
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: 'Pretendard', sans-serif; color: white; }
-        #container { position: relative; width: 100vw; height: 100vh; }
-        video { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 0.6; }
-        canvas { position: absolute; width: 100%; height: 100%; transform: scaleX(-1); }
+        body { margin: 0; overflow: hidden; background: #111; font-family: 'Pretendard', sans-serif; color: white; }
+        
+        /* 1. 비디오 그리드 레이아웃 (배경) */
+        #video-grid {
+            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+            display: grid;
+            grid-gap: 2px;
+            background: #000;
+            z-index: 0; /* 제일 뒤 */
+        }
+        
+        /* 인원수에 따른 그리드 변경 클래스 */
+        .grid-1 { grid-template-columns: 1fr; }
+        .grid-2 { grid-template-columns: 1fr 1fr; }
+        .grid-3 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; } /* 3명일 때도 4칸 중 하나 비움 */
+        .grid-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
 
+        video {
+            width: 100%; height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); /* 거울 모드 */
+        }
+
+        /* 2. 캔버스 (그림판 - 비디오 위에 겹침) */
+        canvas { 
+            position: absolute; top: 0; left: 0; 
+            width: 100%; height: 100%; 
+            transform: scaleX(-1); /* 좌표계 통일 */
+            z-index: 10; /* 비디오보다 위 */
+            pointer-events: none; /* 클릭 통과 (제어는 MediaPipe로 함) */
+        }
+
+        /* 3. UI 패널 */
         .ui-panel {
             position: absolute; top: 20px; left: 20px; 
-            background: rgba(0, 0, 0, 0.8); padding: 20px; border-radius: 15px;
-            border: 2px solid #00d4ff; backdrop-filter: blur(10px);
-            z-index: 100;
+            background: rgba(0, 0, 0, 0.7); padding: 15px; border-radius: 12px;
+            border: 1px solid #00d4ff; backdrop-filter: blur(5px);
+            z-index: 20; /* 제일 위 */
         }
-        .color-indicator { display: inline-block; width: 15px; height: 15px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
-        .guide-item { margin: 8px 0; font-size: 0.9rem; }
-        kbd { background: #333; padding: 2px 6px; border-radius: 4px; color: #00d4ff; border: 1px solid #555; }
-        .status { margin-top: 15px; font-weight: bold; }
+        .room-box { display: flex; gap: 5px; margin-bottom: 10px; }
+        input { background: #222; border: 1px solid #555; color: white; padding: 6px; border-radius: 4px; width: 80px; }
+        button { background: #00d4ff; border: none; padding: 6px 12px; border-radius: 4px; font-weight: bold; cursor: pointer; }
         
-        /* 방 설정 추가 */
-        .room-box { margin-bottom: 15px; display: flex; gap: 5px; }
-        .room-box input { background: #222; border: 1px solid #444; color: white; padding: 5px; border-radius: 4px; width: 100px; }
-        .room-box button { background: #00d4ff; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        .status { font-size: 0.8rem; margin-top: 5px; color: #ccc; }
+        .guide { font-size: 0.8rem; margin-top: 10px; color: #aaa; }
+        kbd { background: #333; padding: 1px 4px; border-radius: 3px; color: #00d4ff; }
     </style>
 </head>
 <body>
-    <div id="container">
-        <video id="input_video"></video>
-        <canvas id="draw_canvas"></canvas>
-        <canvas id="skeleton_canvas"></canvas>
-        
-        <div class="ui-panel">
-            <h2 style="margin:0 0 10px 0; color:#00d4ff;">AI Smart Canvas Pro+</h2>
-            
-            <div class="room-box">
-                <input type="text" id="room_input" placeholder="방 코드">
-                <button id="btn_connect">연결</button>
-            </div>
+    <!-- 1. 비디오 영역 -->
+    <div id="video-grid" class="grid-1"></div>
 
-            <div class="guide-item">✏️ <b>그리기:</b> <kbd>Shift</kbd> 누른 채로 움직이기</div>
-            <div class="guide-item">✋ <b>지우개:</b> 손바닥 (보) + <kbd>Shift</kbd></div>
-            <div class="guide-item">🎨 <b>색상:</b> <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> 번키</div>
-            <div class="guide-item">🧹 <b>전체 삭제:</b> <kbd>Space</kbd></div>
-            <hr style="border:0; border-top:1px solid #444;">
-            <div id="current_color_info">
-                현재 색상: <span id="color_dot" class="color-indicator" style="background:#00d4ff;"></span>
-            </div>
-            <div id="connection_status" class="status" style="color:#ff4444;">● 클라우드 미연결</div>
+    <!-- 2. 그림 영역 -->
+    <canvas id="draw_canvas"></canvas>
+    <canvas id="skeleton_canvas"></canvas>
+    
+    <!-- 3. UI 영역 -->
+    <div class="ui-panel">
+        <h3 style="margin:0 0 10px 0; color:#00d4ff;">AI 화상 칠판</h3>
+        <div class="room-box">
+            <input type="text" id="room_input" placeholder="방 코드" value="1234">
+            <button id="btn_join">입장</button>
+        </div>
+        <div id="status_text" class="status">🔴 대기 중</div>
+        <div class="guide">
+            ✏️ 그리기: <kbd>Shift</kbd> + 손 이동<br>
+            ✋ 지우개: 손바닥 펴기<br>
+            🧹 전체지움: <kbd>Space</kbd>
         </div>
     </div>
 
+    <!-- 숨겨진 비디오 (MediaPipe 분석용 원본) -->
+    <video id="hidden_input_video" style="display:none;" autoplay playsinline></video>
+
     <script>
-        // --- 1. Firebase 설정 ---
+        // === 1. 설정 및 초기화 ===
         const firebaseConfig = {
             apiKey: "AIzaSyAsqdEaY6owNqubNe0bgvGbaLseeuV5Szg",
             authDomain: "drawing-math-6c46d.firebaseapp.com",
@@ -71,127 +100,190 @@
             appId: "1:70250148794:web:ba032b997c7831e5932383",
             measurementId: "G-LQ3CS4YX3B"
         };
-        
         firebase.initializeApp(firebaseConfig);
         const database = firebase.database();
-        const myClientId = Math.random().toString(36).substring(7);
-        let currentRoom = null;
 
-        // --- 2. 기본 설정 (con1.txt 로직) ---
-        const videoElement = document.getElementById('input_video');
+        const videoGrid = document.getElementById('video-grid');
         const drawCanvas = document.getElementById('draw_canvas');
         const dctx = drawCanvas.getContext('2d');
         const skeletonCanvas = document.getElementById('skeleton_canvas');
         const sctx = skeletonCanvas.getContext('2d');
-        const statusEl = document.getElementById('connection_status');
-        const colorDot = document.getElementById('color_dot');
+        const hiddenVideo = document.getElementById('hidden_input_video');
+        
+        let myPeer = null;
+        let myStream = null;
+        let peers = {}; // 연결된 피어들 저장
+        let currentRoom = null;
+        let myClientId = Math.random().toString(36).substring(7);
 
-        let currentColor = "#00d4ff";
-        let lastPos = null;
-        let isShiftPressed = false;
-        const colors = ["#00d4ff", "#ff4444", "#00ff88"];
-        const HAND_CONNECTIONS = [[0,1], [1,2], [2,3], [3,4], [0,5], [5,6], [6,7], [7,8], [5,9], [9,10], [10,11], [11,12], [9,13], [13,14], [14,15], [15,16], [13,17], [17,18], [18,19], [19,20], [0,17]];
-
+        // 캔버스 리사이징
         function resize() {
             drawCanvas.width = skeletonCanvas.width = window.innerWidth;
             drawCanvas.height = skeletonCanvas.height = window.innerHeight;
         }
-        window.addEventListener('resize', resize); resize();
+        window.addEventListener('resize', resize);
+        resize();
 
-        // --- 3. Firebase 통신 로직 ---
-        document.getElementById('btn_connect').onclick = () => {
+        // === 2. 화상 통화 (WebRTC + PeerJS) 로직 ===
+        document.getElementById('btn_join').onclick = async () => {
             const roomId = document.getElementById('room_input').value.trim();
-            if(!roomId) return alert("방 코드를 입력하세요.");
-            
-            if(currentRoom) {
-                database.ref(`rooms/${currentRoom}/draw`).off();
-                database.ref(`rooms/${currentRoom}/clear`).off();
-            }
-
+            if (!roomId) return alert("방 코드를 입력하세요.");
             currentRoom = roomId;
-            statusEl.innerText = `● 클라우드 연결됨: ${currentRoom}`;
-            statusEl.style.color = "#00ff88";
 
-            // 실시간 데이터 수신 (기존 socket.on 역할)
+            document.getElementById('btn_join').disabled = true;
+            document.getElementById('status_text').innerText = "🟡 카메라 연결 중...";
+
+            // 1) 내 카메라 가져오기
+            try {
+                myStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                addVideoStream(myStream, true); // 내 화면 추가 (음소거)
+                hiddenVideo.srcObject = myStream; // MediaPipe용
+                hiddenVideo.play();
+                
+                // 2) PeerJS 서버 연결 (무료 클라우드 서버 사용)
+                myPeer = new Peer(undefined, {
+                    host: 'peerjs-server.herokuapp.com', secure: true, port: 443
+                });
+                
+                // 3) PeerJS ID 생성되면 파이어베이스에 "나 입장했소" 알림
+                myPeer.on('open', id => {
+                    document.getElementById('status_text').innerText = `🟢 방: ${roomId} (접속됨)`;
+                    document.getElementById('status_text').style.color = "#00ff88";
+
+                    // DB에 내 PeerID 등록
+                    database.ref(`rooms/${roomId}/users/${id}`).set({
+                        name: "User-" + myClientId
+                    });
+                    
+                    // DB 접속 끊기면 자동으로 내 정보 삭제
+                    database.ref(`rooms/${roomId}/users/${id}`).onDisconnect().remove();
+                    
+                    startDrawingSync(); // 그림 공유 시작
+                });
+
+                // 4) 누군가 나에게 전화 걸면 받기
+                myPeer.on('call', call => {
+                    call.answer(myStream); // 내 영상 보내며 응답
+                    const video = document.createElement('video');
+                    call.on('stream', userVideoStream => {
+                        if (!peers[call.peer]) { // 중복 방지
+                            addVideoStream(userVideoStream, false);
+                            peers[call.peer] = call;
+                        }
+                    });
+                });
+
+                // 5) 새로운 유저가 들어오면 내가 전화 걸기
+                database.ref(`rooms/${roomId}/users`).on('child_added', snapshot => {
+                    const userId = snapshot.key;
+                    // 내 아이디가 아니고, 아직 연결 안 된 사람이면
+                    if (userId !== myPeer.id && !peers[userId]) {
+                        connectToNewUser(userId, myStream);
+                    }
+                });
+
+                // 6) 유저가 나가면 화면 제거
+                database.ref(`rooms/${roomId}/users`).on('child_removed', snapshot => {
+                    if (peers[snapshot.key]) peers[snapshot.key].close();
+                    // 화면 갱신은 간단하게 reload 권장하지만, 여기선 DOM 정리
+                    updateGridClass();
+                });
+
+            } catch (err) {
+                alert("카메라 접속 실패! 주소창에 'https' 또는 'localhost'인지 확인하세요.");
+                console.error(err);
+            }
+        };
+
+        function connectToNewUser(userId, stream) {
+            const call = myPeer.call(userId, stream); // 전화 걸기
+            const video = document.createElement('video');
+            call.on('stream', userVideoStream => {
+                if (!peers[userId]) {
+                    addVideoStream(userVideoStream, false);
+                    peers[userId] = call;
+                }
+            });
+            call.on('close', () => { video.remove(); updateGridClass(); });
+            peers[userId] = call;
+        }
+
+        function addVideoStream(stream, isMine) {
+            const video = document.createElement('video');
+            video.srcObject = stream;
+            video.addEventListener('loadedmetadata', () => video.play());
+            if (isMine) video.muted = true; // 내 목소리는 안 들리게
+            videoGrid.append(video);
+            updateGridClass();
+        }
+
+        function updateGridClass() {
+            const count = videoGrid.childElementCount;
+            videoGrid.className = ''; // 클래스 초기화
+            if (count === 1) videoGrid.classList.add('grid-1');
+            else if (count === 2) videoGrid.classList.add('grid-2');
+            else if (count === 3) videoGrid.classList.add('grid-3');
+            else videoGrid.classList.add('grid-4');
+        }
+
+        // === 3. 그림 공유 (Firebase) ===
+        function startDrawingSync() {
+            // 다른 사람 그림 받기
             database.ref(`rooms/${currentRoom}/draw`).on('child_added', (snapshot) => {
                 const data = snapshot.val();
                 if(data.sender !== myClientId) {
                     drawLine(dctx, data.from, data.to, data.color, 5, data.isEraser);
                 }
             });
-
-            database.ref(`rooms/${currentRoom}/clear`).on('value', (snapshot) => {
+            // 전체 지우기
+            database.ref(`rooms/${currentRoom}/clear`).on('value', () => {
                 dctx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
             });
-        };
+        }
 
         function broadcastDraw(from, to, color, isEraser) {
             if(!currentRoom) return;
             const drawRef = database.ref(`rooms/${currentRoom}/draw`).push();
             drawRef.set({ from, to, color, isEraser, sender: myClientId });
-            setTimeout(() => drawRef.remove(), 5000); // 5초 후 DB 최적화
+            setTimeout(() => drawRef.remove(), 5000);
         }
 
-        function drawLine(ctx, from, to, color, size = 5, isEraser = false) {
+        // === 4. 그리기 도구 (MediaPipe) ===
+        let lastPos = null;
+        let isShiftPressed = false;
+        let currentColor = "#00d4ff";
+
+        function drawLine(ctx, from, to, color, size, isEraser) {
             ctx.globalCompositeOperation = isEraser ? 'destination-out' : 'source-over';
             ctx.beginPath();
             ctx.strokeStyle = color;
             ctx.lineWidth = isEraser ? 60 : size;
             ctx.lineCap = "round";
-            ctx.lineJoin = "round";
             ctx.moveTo(from.x, from.y);
             ctx.lineTo(to.x, to.y);
             ctx.stroke();
             ctx.globalCompositeOperation = 'source-over';
         }
 
-        function drawHandSkeleton(landmarks, color) {
-            sctx.clearRect(0, 0, skeletonCanvas.width, skeletonCanvas.height);
-            sctx.strokeStyle = isShiftPressed ? color : "rgba(255, 255, 255, 0.4)";
-            sctx.lineWidth = isShiftPressed ? 5 : 2;
-            
-            HAND_CONNECTIONS.forEach(([start, end]) => {
-                const s = landmarks[start];
-                const e = landmarks[end];
-                sctx.beginPath();
-                sctx.moveTo(s.x * skeletonCanvas.width, s.y * skeletonCanvas.height);
-                sctx.lineTo(e.x * skeletonCanvas.width, e.y * skeletonCanvas.height);
-                sctx.stroke();
-            });
-
-            landmarks.forEach((lm, i) => {
-                sctx.fillStyle = (i === 8) ? color : "white";
-                sctx.beginPath();
-                sctx.arc(lm.x * skeletonCanvas.width, lm.y * skeletonCanvas.height, 5, 0, Math.PI * 2);
-                sctx.fill();
-            });
-        }
-
-        // --- 4. 컨트롤 (con1.txt 로직 그대로) ---
-        window.onkeydown = (e) => {
-            if (e.key === 'Shift') isShiftPressed = true;
-            if (e.code === 'Space' && currentRoom) {
-                database.ref(`rooms/${currentRoom}/clear`).set(Date.now());
-            }
-            if (e.key === '1') { currentColor = colors[0]; colorDot.style.background = colors[0]; }
-            if (e.key === '2') { currentColor = colors[1]; colorDot.style.background = colors[1]; }
-            if (e.key === '3') { currentColor = colors[2]; colorDot.style.background = colors[2]; }
-        };
-        window.onkeyup = (e) => { if (e.key === 'Shift') isShiftPressed = false; };
-
-        // --- 5. MediaPipe Hands & Camera (con1.txt 로직 그대로) ---
         const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
         hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
 
         hands.onResults((results) => {
+            sctx.clearRect(0, 0, skeletonCanvas.width, skeletonCanvas.height);
             if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
                 const landmarks = results.multiHandLandmarks[0];
                 const indexTip = landmarks[8];
-                const fingersUp = [8, 12, 16, 20].filter(i => landmarks[i].y < landmarks[i-2].y).length;
-                const isEraser = fingersUp >= 3; 
                 const currentPos = { x: indexTip.x * drawCanvas.width, y: indexTip.y * drawCanvas.height };
+                
+                // 손가락 3개 이상 펴면 지우개
+                const fingersUp = [8, 12, 16, 20].filter(i => landmarks[i].y < landmarks[i-2].y).length;
+                const isEraser = fingersUp >= 3;
 
-                drawHandSkeleton(landmarks, isEraser ? "#ff4444" : currentColor);
+                // 스켈레톤 그리기 (내 화면에만 보임)
+                sctx.fillStyle = isEraser ? "red" : "white";
+                sctx.beginPath();
+                sctx.arc(currentPos.x, currentPos.y, isEraser?20:8, 0, Math.PI * 2);
+                sctx.fill();
 
                 if (lastPos && isShiftPressed) {
                     drawLine(dctx, lastPos, currentPos, currentColor, 5, isEraser);
@@ -199,16 +291,23 @@
                 }
                 lastPos = currentPos;
             } else {
-                sctx.clearRect(0, 0, skeletonCanvas.width, skeletonCanvas.height);
                 lastPos = null;
             }
         });
 
-        const camera = new Camera(videoElement, {
-            onFrame: async () => { await hands.send({image: videoElement}); },
+        // 카메라 시작 (MediaPipe용 루프)
+        const camera = new Camera(hiddenVideo, {
+            onFrame: async () => { await hands.send({image: hiddenVideo}); },
             width: 1280, height: 720
         });
-        camera.start().catch(e => alert("카메라를 시작할 수 없습니다. HTTPS 또는 localhost인지 확인하세요."));
+        camera.start();
+
+        // 키보드 이벤트
+        window.onkeydown = (e) => { 
+            if (e.key === 'Shift') isShiftPressed = true;
+            if (e.code === 'Space' && currentRoom) database.ref(`rooms/${currentRoom}/clear`).set(Date.now());
+        };
+        window.onkeyup = (e) => { if (e.key === 'Shift') isShiftPressed = false; };
     </script>
 </body>
 </html>
