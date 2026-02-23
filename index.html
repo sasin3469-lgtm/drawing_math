@@ -3,545 +3,212 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 수학 판서 시스템 V3 (Multiplayer)</title>
-    <!-- MediaPipe 라이브러리 로드 -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <!-- PeerJS (멀티플레이용) -->
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-    
+    <title>AI Smart Canvas Pro+ (Firebase Cloud)</title>
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-database-compat.js"></script>
+    <!-- MediaPipe SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <style>
-        body {
-            margin: 0;
-            padding: 0;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            background-color: #121212;
-            color: white;
-            font-family: 'Pretendard', sans-serif;
-            overflow: hidden;
-        }
-        #ui-panel {
-            padding: 12px;
-            text-align: center;
-            background: rgba(0, 0, 0, 0.7);
-            width: 100%;
-            backdrop-filter: blur(15px);
-            z-index: 10;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 10px;
-        }
-        .status-row {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 20px;
-            width: 100%;
-            position: relative;
-        }
-        .status {
-            font-size: 1.1rem;
-            font-weight: 600;
-            color: #4db8ff;
-        }
-        .controls {
-            display: flex;
-            gap: 15px;
-            justify-content: center;
-            font-size: 0.8rem;
-            color: #aaa;
-        }
-        /* 멀티플레이 UI */
-        #network-panel {
-            font-size: 0.9rem;
-            display: flex;
-            gap: 10px;
-            align-items: center;
-        }
-        .btn {
-            background: #333;
-            border: 1px solid #555;
-            color: white;
-            padding: 5px 10px;
-            border-radius: 5px;
-            cursor: pointer;
-            transition: 0.2s;
-        }
-        .btn:hover { background: #555; }
-        .btn-primary { background: #0066cc; border-color: #0055aa; }
-        .btn-primary:hover { background: #0077dd; }
-        #room-id-display {
-            font-family: monospace;
-            background: #222;
-            padding: 3px 8px;
-            border-radius: 4px;
-            border: 1px solid #444;
-            user-select: all;
-            display: none;
-        }
-        #join-input {
-            background: #222;
-            border: 1px solid #444;
-            color: white;
-            padding: 5px;
-            border-radius: 5px;
-            width: 100px;
-        }
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Pretendard', sans-serif; color: white; }
+        #container { position: relative; width: 100vw; height: 100vh; }
+        video { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 0.6; }
+        canvas { position: absolute; width: 100%; height: 100%; transform: scaleX(-1); }
 
-        #container {
-            position: relative;
-            width: 100vw;
-            height: calc(100vh - 120px); /* UI 패널 높이 고려 */
-            display: flex;
-            justify-content: center;
-            align-items: center;
+        .ui-panel {
+            position: absolute; top: 20px; left: 20px; 
+            background: rgba(0, 0, 0, 0.8); padding: 20px; border-radius: 15px;
+            border: 2px solid #00d4ff; backdrop-filter: blur(10px);
+            z-index: 100;
         }
-        video {
-            display: none;
-        }
-        canvas {
-            position: absolute;
-            transform: scaleX(-1); /* 거울 모드 */
-        }
-        #bg-canvas { z-index: 1; }
-        #draw-canvas { z-index: 2; }
-        #output-canvas { z-index: 3; opacity: 0.5; pointer-events: none; }
-        .color-indicator {
-            width: 10px;
-            height: 10px;
-            display: inline-block;
-            border-radius: 50%;
-            margin-left: 4px;
-        }
+        .color-indicator { display: inline-block; width: 15px; height: 15px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+        .guide-item { margin: 8px 0; font-size: 0.9rem; }
+        kbd { background: #333; padding: 2px 6px; border-radius: 4px; color: #00d4ff; border: 1px solid #555; }
+        .status { margin-top: 15px; font-weight: bold; }
+        
+        /* 방 설정 추가 */
+        .room-box { margin-bottom: 15px; display: flex; gap: 5px; }
+        .room-box input { background: #222; border: 1px solid #444; color: white; padding: 5px; border-radius: 4px; width: 100px; }
+        .room-box button { background: #00d4ff; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-weight: bold; }
     </style>
 </head>
 <body>
-
-    <div id="ui-panel">
-        <div class="status-row">
-            <div id="network-panel">
-                <span id="connection-status">🔴 오프라인</span>
-                <button id="btn-host" class="btn btn-primary">방 만들기</button>
-                <div id="join-area" style="display:flex; gap:5px;">
-                    <input type="text" id="join-input" placeholder="방 ID 입력">
-                    <button id="btn-join" class="btn">참여</button>
-                </div>
-                <span id="room-id-display"></span>
-            </div>
-        </div>
-        
-        <div class="status-row">
-            <div class="status">모드: <span id="mode-text">카메라 연결 중...</span></div>
-        </div>
-
-        <div class="controls">
-            <span>🤏 핀치: <b>판서</b> <span id="current-color" class="color-indicator" style="background: blue;"></span></span>
-            <span>🖐 손바닥: <b>지우개</b></span>
-            <span>✌ 빨 🤟 초 🖖 파</span>
-        </div>
-    </div>
-
     <div id="container">
-        <video id="input-video"></video>
-        <canvas id="bg-canvas"></canvas>
-        <canvas id="draw-canvas"></canvas>
-        <canvas id="output-canvas"></canvas>
+        <video id="input_video"></video>
+        <canvas id="draw_canvas"></canvas>
+        <canvas id="skeleton_canvas"></canvas>
+        
+        <div class="ui-panel">
+            <h2 style="margin:0 0 10px 0; color:#00d4ff;">AI Smart Canvas Pro+</h2>
+            
+            <div class="room-box">
+                <input type="text" id="room_input" placeholder="방 코드">
+                <button id="btn_connect">연결</button>
+            </div>
+
+            <div class="guide-item">✏️ <b>그리기:</b> <kbd>Shift</kbd> 누른 채로 움직이기</div>
+            <div class="guide-item">✋ <b>지우개:</b> 손바닥 (보) + <kbd>Shift</kbd></div>
+            <div class="guide-item">🎨 <b>색상:</b> <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> 번키</div>
+            <div class="guide-item">🧹 <b>전체 삭제:</b> <kbd>Space</kbd></div>
+            <hr style="border:0; border-top:1px solid #444;">
+            <div id="current_color_info">
+                현재 색상: <span id="color_dot" class="color-indicator" style="background:#00d4ff;"></span>
+            </div>
+            <div id="connection_status" class="status" style="color:#ff4444;">● 클라우드 미연결</div>
+        </div>
     </div>
 
     <script>
-        const videoElement = document.getElementById('input-video');
-        const bgCanvas = document.getElementById('bg-canvas');
-        const bgCtx = bgCanvas.getContext('2d');
-        const drawCanvas = document.getElementById('draw-canvas');
-        const drawCtx = drawCanvas.getContext('2d');
-        const outputCanvas = document.getElementById('output-canvas');
-        const outputCtx = outputCanvas.getContext('2d');
+        // --- 1. Firebase 설정 ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyAsqdEaY6owNqubNe0bgvGbaLseeuV5Szg",
+            authDomain: "drawing-math-6c46d.firebaseapp.com",
+            databaseURL : "https://drawing-math-6c46d-default-rtdb.firebaseio.com",
+            projectId: "drawing-math-6c46d",
+            storageBucket: "drawing-math-6c46d.firebasestorage.app",
+            messagingSenderId: "70250148794",
+            appId: "1:70250148794:web:ba032b997c7831e5932383",
+            measurementId: "G-LQ3CS4YX3B"
+        };
         
-        const modeText = document.getElementById('mode-text');
-        const colorIndicator = document.getElementById('current-color');
+        firebase.initializeApp(firebaseConfig);
+        const database = firebase.database();
+        const myClientId = Math.random().toString(36).substring(7);
+        let currentRoom = null;
 
-        // --- 멀티플레이 변수 ---
-        let peer = null;
-        let connections = []; // 연결된 친구들
-        let isHost = false;
+        // --- 2. 기본 설정 (con1.txt 로직) ---
+        const videoElement = document.getElementById('input_video');
+        const drawCanvas = document.getElementById('draw_canvas');
+        const dctx = drawCanvas.getContext('2d');
+        const skeletonCanvas = document.getElementById('skeleton_canvas');
+        const sctx = skeletonCanvas.getContext('2d');
+        const statusEl = document.getElementById('connection_status');
+        const colorDot = document.getElementById('color_dot');
 
-        // UI 요소
-        const btnHost = document.getElementById('btn-host');
-        const btnJoin = document.getElementById('btn-join');
-        const joinInput = document.getElementById('join-input');
-        const roomIdDisplay = document.getElementById('room-id-display');
-        const joinArea = document.getElementById('join-area');
-        const connStatus = document.getElementById('connection-status');
-
-        let drawColor = '#0000FF';
-        let brushThickness = 6;
-        let eraserThickness = 120;
-        let prevX = 0, prevY = 0;
-        let isDrawing = false;
+        let currentColor = "#00d4ff";
+        let lastPos = null;
+        let isShiftPressed = false;
+        const colors = ["#00d4ff", "#ff4444", "#00ff88"];
+        const HAND_CONNECTIONS = [[0,1], [1,2], [2,3], [3,4], [0,5], [5,6], [6,7], [7,8], [5,9], [9,10], [10,11], [11,12], [9,13], [13,14], [14,15], [15,16], [13,17], [17,18], [18,19], [19,20], [0,17]];
 
         function resize() {
-            const width = window.innerWidth;
-            const height = window.innerHeight - document.getElementById('ui-panel').offsetHeight;
-            bgCanvas.width = drawCanvas.width = outputCanvas.width = width;
-            bgCanvas.height = drawCanvas.height = outputCanvas.height = height;
-            drawCtx.lineCap = 'round';
-            drawCtx.lineJoin = 'round';
+            drawCanvas.width = skeletonCanvas.width = window.innerWidth;
+            drawCanvas.height = skeletonCanvas.height = window.innerHeight;
         }
+        window.addEventListener('resize', resize); resize();
 
-        window.addEventListener('resize', resize);
-        resize();
-
-        // --- 네트워크 로직 ---
-        let heartbeatInterval;
-
-        function initPeer() {
-            // 초기화 전 기존 리소스 정리
-            if (peer) {
-                try { peer.destroy(); } catch(e) {}
-                peer = null;
-            }
-            if (heartbeatInterval) clearInterval(heartbeatInterval);
-
-            connStatus.innerText = "🟡 서버 접속 시도 중...";
-
-            try {
-                // 가장 표준적인 PeerJS 클라우드 설정
-                peer = new Peer({
-                    debug: 2,
-                    secure: true,
-                    config: {
-                        'iceServers': [
-                            { urls: 'stun:stun.l.google.com:19302' },
-                            { urls: 'stun:stun1.l.google.com:19302' }
-                        ]
-                    }
-                });
-
-                peer.on('open', (id) => {
-                    console.log('연결 성공! ID:', id);
-                    connStatus.innerText = isHost ? "🟢 방장 (ID 공유 중)" : "🟢 온라인 (대기 중)";
-                    
-                    if (isHost) {
-                        roomIdDisplay.style.display = 'inline';
-                        roomIdDisplay.innerText = `방 ID: ${id}`;
-                        btnHost.style.display = 'none';
-                        joinArea.style.display = 'none';
-                    }
-                    startHeartbeat();
-                });
-
-                peer.on('connection', (conn) => {
-                    console.log('새로운 사용자 연결됨:', conn.peer);
-                    handleConnection(conn);
-                });
-
-                peer.on('disconnected', () => {
-                    console.log('서버 연결 끊김');
-                    connStatus.innerText = "🔴 연결 끊김 (3초 후 재시도)";
-                    // 재연결 대신 3초 후 아예 새로 시작
-                    setTimeout(() => {
-                        if (peer && peer.disconnected) initPeer();
-                    }, 3000);
-                });
-
-                peer.on('error', (err) => {
-                    console.error('PeerJS 에러 발생:', err.type);
-                    connStatus.innerText = "🔴 오류: " + err.type;
-                    
-                    // 특정 오류 발생 시 복구 시도
-                    if (err.type === 'network' || err.type === 'server-error') {
-                        setTimeout(() => initPeer(), 5000);
-                    }
-                });
-
-            } catch (err) {
-                console.error('초기화 실패:', err);
-                connStatus.innerText = "🔴 초기화 실패 (새로고침 하세요)";
-            }
-        }
-
-        function startHeartbeat() {
-            if (heartbeatInterval) clearInterval(heartbeatInterval);
-            heartbeatInterval = setInterval(() => {
-                if (peer && !peer.destroyed && peer.open) {
-                    // 서버에 살아있음을 알림
-                    if (peer.socket && peer.socket._open) {
-                        peer.socket.send({ type: 'HEARTBEAT' });
-                    }
-                }
-            }, 10000); // 10초로 단축
-        }
-
-        function handleConnection(conn) {
-            // 이미 4명이면 거절 (방장 포함 4명 = 연결 3개)
-            if (connections.length >= 3) {
-                conn.on('open', () => {
-                    conn.send({ type: 'error', message: '방이 가득 찼습니다 (최대 4명)' });
-                    setTimeout(() => conn.close(), 500);
-                });
-                return;
+        // --- 3. Firebase 통신 로직 ---
+        document.getElementById('btn_connect').onclick = () => {
+            const roomId = document.getElementById('room_input').value.trim();
+            if(!roomId) return alert("방 코드를 입력하세요.");
+            
+            if(currentRoom) {
+                database.ref(`rooms/${currentRoom}/draw`).off();
+                database.ref(`rooms/${currentRoom}/clear`).off();
             }
 
-            connections.push(conn);
-            updateStatus();
+            currentRoom = roomId;
+            statusEl.innerText = `● 클라우드 연결됨: ${currentRoom}`;
+            statusEl.style.color = "#00ff88";
 
-            conn.on('data', (data) => {
-                if (data.type === 'error') {
-                    alert(data.message);
-                    return;
-                }
-                
-                // 데이터 받으면 그리기
-                drawRemote(data);
-                
-                // 방장이라면 다른 친구들에게도 전달 (브로드캐스트)
-                if (isHost) {
-                    connections.forEach(c => {
-                        if (c.peer !== conn.peer) {
-                            c.send(data);
-                        }
-                    });
+            // 실시간 데이터 수신 (기존 socket.on 역할)
+            database.ref(`rooms/${currentRoom}/draw`).on('child_added', (snapshot) => {
+                const data = snapshot.val();
+                if(data.sender !== myClientId) {
+                    drawLine(dctx, data.from, data.to, data.color, 5, data.isEraser);
                 }
             });
 
-            conn.on('close', () => {
-                console.log('Connection closed:', conn.peer);
-                connections = connections.filter(c => c !== conn);
-                updateStatus();
-            });
-        }
-
-        function updateStatus() {
-            connStatus.innerText = `🟢 접속자: ${connections.length + 1}/4`;
-        }
-
-        function broadcastData(data) {
-            connections.forEach(conn => {
-                if (conn.open) conn.send(data);
-            });
-        }
-
-        // 상대방 그림 그리기
-        function drawRemote(data) {
-            const { type, x1, y1, x2, y2, color, width, eraser } = data;
-            
-            // 상대 좌표(0~1)를 절대 좌표(px)로 변환
-            const w = drawCanvas.width;
-            const h = drawCanvas.height;
-            const ax1 = x1 * w;
-            const ay1 = y1 * h;
-            const ax2 = x2 * w;
-            const ay2 = y2 * h;
-
-            if (type === 'line') {
-                if (eraser) {
-                    drawCtx.globalCompositeOperation = 'destination-out';
-                    drawCtx.beginPath();
-                    drawCtx.arc(ax2, ay2, width/2, 0, Math.PI * 2);
-                    drawCtx.fill();
-                } else {
-                    drawCtx.globalCompositeOperation = 'source-over';
-                    drawCtx.beginPath();
-                    drawCtx.strokeStyle = color;
-                    drawCtx.lineWidth = width;
-                    drawCtx.moveTo(ax1, ay1);
-                    drawCtx.lineTo(ax2, ay2);
-                    drawCtx.stroke();
-                }
-            }
-        }
-
-        // 버튼 이벤트
-        btnHost.onclick = () => {
-            isHost = true;
-            connStatus.innerText = "🟡 서버 연결 중...";
-            initPeer(); 
-        };
-
-        btnJoin.onclick = () => {
-            const hostId = joinInput.value.trim();
-            if (!hostId) return alert('방 ID를 입력하세요');
-            
-            isHost = false;
-            connStatus.innerText = "🟡 서버 연결 중...";
-            initPeer(); 
-            
-            peer.on('open', () => {
-                const conn = peer.connect(hostId);
-                conn.on('open', () => {
-                    connStatus.innerText = "🟢 연결됨!";
-                    handleConnection(conn);
-                    btnHost.style.display = 'none';
-                    joinArea.style.display = 'none';
-                });
+            database.ref(`rooms/${currentRoom}/clear`).on('value', (snapshot) => {
+                dctx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
             });
         };
 
+        function broadcastDraw(from, to, color, isEraser) {
+            if(!currentRoom) return;
+            const drawRef = database.ref(`rooms/${currentRoom}/draw`).push();
+            drawRef.set({ from, to, color, isEraser, sender: myClientId });
+            setTimeout(() => drawRef.remove(), 5000); // 5초 후 DB 최적화
+        }
 
-        function onResults(results) {
-            bgCtx.save();
-            bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
-            bgCtx.drawImage(results.image, 0, 0, bgCanvas.width, bgCanvas.height);
+        function drawLine(ctx, from, to, color, size = 5, isEraser = false) {
+            ctx.globalCompositeOperation = isEraser ? 'destination-out' : 'source-over';
+            ctx.beginPath();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = isEraser ? 60 : size;
+            ctx.lineCap = "round";
+            ctx.lineJoin = "round";
+            ctx.moveTo(from.x, from.y);
+            ctx.lineTo(to.x, to.y);
+            ctx.stroke();
+            ctx.globalCompositeOperation = 'source-over';
+        }
+
+        function drawHandSkeleton(landmarks, color) {
+            sctx.clearRect(0, 0, skeletonCanvas.width, skeletonCanvas.height);
+            sctx.strokeStyle = isShiftPressed ? color : "rgba(255, 255, 255, 0.4)";
+            sctx.lineWidth = isShiftPressed ? 5 : 2;
             
-            outputCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
+            HAND_CONNECTIONS.forEach(([start, end]) => {
+                const s = landmarks[start];
+                const e = landmarks[end];
+                sctx.beginPath();
+                sctx.moveTo(s.x * skeletonCanvas.width, s.y * skeletonCanvas.height);
+                sctx.lineTo(e.x * skeletonCanvas.width, e.y * skeletonCanvas.height);
+                sctx.stroke();
+            });
 
+            landmarks.forEach((lm, i) => {
+                sctx.fillStyle = (i === 8) ? color : "white";
+                sctx.beginPath();
+                sctx.arc(lm.x * skeletonCanvas.width, lm.y * skeletonCanvas.height, 5, 0, Math.PI * 2);
+                sctx.fill();
+            });
+        }
+
+        // --- 4. 컨트롤 (con1.txt 로직 그대로) ---
+        window.onkeydown = (e) => {
+            if (e.key === 'Shift') isShiftPressed = true;
+            if (e.code === 'Space' && currentRoom) {
+                database.ref(`rooms/${currentRoom}/clear`).set(Date.now());
+            }
+            if (e.key === '1') { currentColor = colors[0]; colorDot.style.background = colors[0]; }
+            if (e.key === '2') { currentColor = colors[1]; colorDot.style.background = colors[1]; }
+            if (e.key === '3') { currentColor = colors[2]; colorDot.style.background = colors[2]; }
+        };
+        window.onkeyup = (e) => { if (e.key === 'Shift') isShiftPressed = false; };
+
+        // --- 5. MediaPipe Hands & Camera (con1.txt 로직 그대로) ---
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
+
+        hands.onResults((results) => {
             if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                for (const landmarks of results.multiHandLandmarks) {
-                    drawConnectors(outputCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 1});
-                    drawLandmarks(outputCtx, landmarks, {color: '#FF0000', lineWidth: 1, radius: 2});
+                const landmarks = results.multiHandLandmarks[0];
+                const indexTip = landmarks[8];
+                const fingersUp = [8, 12, 16, 20].filter(i => landmarks[i].y < landmarks[i-2].y).length;
+                const isEraser = fingersUp >= 3; 
+                const currentPos = { x: indexTip.x * drawCanvas.width, y: indexTip.y * drawCanvas.height };
 
-                    const thumbTip = landmarks[4];
-                    const indexTip = landmarks[8];
-                    const palmCenter = landmarks[9]; 
-                    
-                    const x = indexTip.x * drawCanvas.width;
-                    const y = indexTip.y * drawCanvas.height;
-                    const palmX = palmCenter.x * drawCanvas.width;
-                    const palmY = palmCenter.y * drawCanvas.height;
-                    
-                    const pinchDistance = Math.hypot(thumbTip.x - indexTip.x, thumbTip.y - indexTip.y);
+                drawHandSkeleton(landmarks, isEraser ? "#ff4444" : currentColor);
 
-                    const isIndexUp = landmarks[8].y < landmarks[6].y;
-                    const isMiddleUp = landmarks[12].y < landmarks[10].y;
-                    const isRingUp = landmarks[16].y < landmarks[14].y;
-                    const isPinkyUp = landmarks[20].y < landmarks[18].y;
-                    
-                    const thumbToIndexBaseDist = Math.hypot(thumbTip.x - landmarks[5].x, thumbTip.y - landmarks[5].y);
-                    const isThumbFolded = thumbToIndexBaseDist < 0.1; 
-
-                    let extendedCount = 0;
-                    if (isIndexUp) extendedCount++;
-                    if (isMiddleUp) extendedCount++;
-                    if (isRingUp) extendedCount++;
-                    if (isPinkyUp) extendedCount++;
-
-                    // 1. 판서 모드
-                    if (pinchDistance < 0.05) {
-                        modeText.innerText = "판서 중...";
-                        drawCtx.globalCompositeOperation = 'source-over';
-                        
-                        if (!isDrawing) {
-                            isDrawing = true;
-                            prevX = x; prevY = y;
-                        }
-
-                        if (prevX !== 0 && prevY !== 0) {
-                            // 로컬 그리기
-                            drawCtx.beginPath();
-                            drawCtx.strokeStyle = drawColor;
-                            drawCtx.lineWidth = brushThickness;
-                            drawCtx.moveTo(prevX, prevY);
-                            drawCtx.lineTo(x, y);
-                            drawCtx.stroke();
-
-                            // 데이터 전송 (상대 좌표로 변환)
-                            if (connections.length > 0) {
-                                const data = {
-                                    type: 'line',
-                                    x1: prevX / drawCanvas.width,
-                                    y1: prevY / drawCanvas.height,
-                                    x2: x / drawCanvas.width,
-                                    y2: y / drawCanvas.height,
-                                    color: drawColor,
-                                    width: brushThickness,
-                                    eraser: false
-                                };
-                                broadcastData(data);
-                            }
-                        }
-                        prevX = x; prevY = y;
-                    } 
-                    // 2. 지우개 모드
-                    else if (extendedCount >= 4 && !isThumbFolded) {
-                        modeText.innerText = "지우개 모드";
-                        drawCtx.globalCompositeOperation = 'destination-out';
-                        drawCtx.beginPath();
-                        drawCtx.arc(palmX, palmY, eraserThickness/2, 0, Math.PI * 2);
-                        drawCtx.fill();
-                        
-                        outputCtx.beginPath();
-                        outputCtx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
-                        outputCtx.lineWidth = 2;
-                        outputCtx.arc(palmX, palmY, eraserThickness/2, 0, Math.PI * 2);
-                        outputCtx.stroke();
-
-                        // 지우개 데이터 전송 (원으로 지우는 대신 큰 점으로 처리 or 그냥 좌표 전송)
-                        // 여기선 펜처럼 연속 전송하되 eraser 플래그 사용
-                        if (connections.length > 0) {
-                             const data = {
-                                type: 'line', // 원으로 처리하면 좋지만, line 로직 재사용
-                                x1: palmX / drawCanvas.width,
-                                y1: palmY / drawCanvas.height,
-                                x2: palmX / drawCanvas.width, // 점 찍기
-                                y2: palmY / drawCanvas.height,
-                                color: 'black',
-                                width: eraserThickness,
-                                eraser: true
-                            };
-                            broadcastData(data);
-                        }
-                        
-                        isDrawing = false;
-                        prevX = 0; prevY = 0;
-                    }
-                    else {
-                        isDrawing = false;
-                        prevX = 0; prevY = 0;
-
-                        if (extendedCount === 2 && isIndexUp && isMiddleUp) {
-                            drawColor = '#FF4444';
-                            modeText.innerText = "색상: 빨강";
-                        } else if (extendedCount === 3 && isIndexUp && isMiddleUp && isRingUp) {
-                            drawColor = '#44FF44';
-                            modeText.innerText = "색상: 초록";
-                        } else if (extendedCount === 4 && isThumbFolded) {
-                            drawColor = '#4444FF';
-                            modeText.innerText = "색상: 파랑";
-                        } else {
-                            modeText.innerText = "대기 중 (핀치하여 쓰기)";
-                        }
-                        colorIndicator.style.background = drawColor;
-                        
-                        outputCtx.beginPath();
-                        outputCtx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-                        outputCtx.arc(x, y, 10, 0, Math.PI * 2);
-                        outputCtx.stroke();
-                    }
+                if (lastPos && isShiftPressed) {
+                    drawLine(dctx, lastPos, currentPos, currentColor, 5, isEraser);
+                    broadcastDraw(lastPos, currentPos, currentColor, isEraser);
                 }
+                lastPos = currentPos;
             } else {
-                modeText.innerText = "손을 찾고 있습니다...";
-                isDrawing = false;
-                prevX = 0; prevY = 0;
+                sctx.clearRect(0, 0, skeletonCanvas.width, skeletonCanvas.height);
+                lastPos = null;
             }
-            bgCtx.restore();
-        }
-
-        const hands = new Hands({
-            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
         });
-
-        hands.setOptions({
-            maxNumHands: 1,
-            modelComplexity: 1,
-            minDetectionConfidence: 0.7,
-            minTrackingConfidence: 0.7
-        });
-
-        hands.onResults(onResults);
 
         const camera = new Camera(videoElement, {
-            onFrame: async () => {
-                await hands.send({image: videoElement});
-            },
-            width: 1280,
-            height: 720
+            onFrame: async () => { await hands.send({image: videoElement}); },
+            width: 1280, height: 720
         });
-        camera.start();
+        camera.start().catch(e => alert("카메라를 시작할 수 없습니다. HTTPS 또는 localhost인지 확인하세요."));
     </script>
 </body>
 </html>
